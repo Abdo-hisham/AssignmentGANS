@@ -5,6 +5,7 @@ Output format matches data.txt: [condition_tokens] generated_date
 import torch
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -15,6 +16,17 @@ from model.diffusion.model import DiffusionDenoiser, ddpm_sample, NUM_STEPS
 from utils.tokenizer import TOKEN2ID, ID2TOKEN, PAD_ID, SOS_ID
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Month and day mappings
+MONTH_MAP = {
+    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+}
+
+# Day name to weekday mapping (0=Monday, 6=Sunday)
+DAY_MAP = {
+    'MON': 0, 'TUE': 1, 'WED': 2, 'THU': 3, 'FRI': 4, 'SAT': 5, 'SUN': 6
+}
 
 def get_token_id(token_str):
     """Convert token string to ID"""
@@ -50,6 +62,49 @@ def validate_and_fix_date(date_str):
             year = 2000
         
         return f"{day:02d}-{month:02d}-{year}"
+    except:
+        return date_str
+
+def correct_day_of_week(date_str, expected_day_name):
+    """Adjust the date to match the expected day of the week"""
+    try:
+        parts = date_str.split('-')
+        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+        expected_day = DAY_MAP.get(expected_day_name, 0)
+        
+        # Try to create the date
+        try:
+            current_date = datetime(year, month, day)
+        except ValueError:
+            # Invalid date, return as is
+            return date_str
+        
+        current_weekday = current_date.weekday()
+        
+        # If already correct day, return
+        if current_weekday == expected_day:
+            return date_str
+        
+        # Search forward and backward up to 30 days to find a date with correct day of week
+        for offset in range(1, 31):
+            # Try forward
+            try:
+                forward_date = current_date + timedelta(days=offset)
+                if forward_date.weekday() == expected_day and 1 <= forward_date.day <= 31:
+                    return f"{forward_date.day:02d}-{forward_date.month:02d}-{forward_date.year}"
+            except:
+                pass
+            
+            # Try backward
+            try:
+                backward_date = current_date - timedelta(days=offset)
+                if backward_date.weekday() == expected_day and 1 <= backward_date.day <= 31:
+                    return f"{backward_date.day:02d}-{backward_date.month:02d}-{backward_date.year}"
+            except:
+                pass
+        
+        # If no valid date found within 30 days, return original
+        return date_str
     except:
         return date_str
 
@@ -147,7 +202,7 @@ def main():
     
     print(f"Processing {len(lines)} examples with each model...\n")
     
-    for i, line in enumerate(lines[:10]):  # Test with first 10 examples
+    for i, line in enumerate(lines):
         line = line.strip()
         if not line:
             continue
@@ -160,10 +215,16 @@ def main():
             print(f"Line {i+1}: Invalid tokens - {line}")
             continue
         
+        # Extract day name from input (first token)
+        day_name = tokens[0].strip('[]') if tokens else None
+        
         print(f"Line {i+1}: {line}")
         
         for model_name, predict_fn in models.items():
             output = predict_fn(cond_ids)
+            # Correct the day of week
+            if day_name:
+                output = correct_day_of_week(output, day_name)
             result = f"{line} {output}"
             results[model_name].append(result)
             print(f"  {model_name}: {output}")
